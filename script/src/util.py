@@ -31,6 +31,7 @@ _ARWEAVE_WALLET_PATH = config["storage"]["arweave"]["keyfilePath"]
 _API_ENDPOINT = config["storage"]['pinata']['pinataApi']
 _API_KEY = config["storage"]['pinata']['pinataPublicKey']
 _API_SECRETE_KEY = config["storage"]['pinata']['pinataSecretKey']
+_PINATA_FOLDER = config['storage']['pinata'].get('uploadDir', '')
 _ASSET_FOLDER = config['collection']['assetDir']
 _HEADERS = {
     'pinata_api_key': _API_KEY,
@@ -96,15 +97,19 @@ def update_whitelist():
         rest_client.wait_for_transaction(txn_hash)
         print("\n Success, txn hash: " + txn_hash)
 
-def prepareFormData(fileDir):
+def prepareFormData(files):
     # data to be sent to api
-    multipart_form_data = {
-        'file': open(fileDir, 'rb')
-    }
-    return multipart_form_data
+    prefix = (_PINATA_FOLDER + '/') if _PINATA_FOLDER else ''
 
-def uploadToIpfs(file):
-    multipart_form_data = prepareFormData(file)
+    files_to_send = []
+    for file_path in files:
+        content_type = 'application/json' if file_path.endswith('.json') else ('image/' + file_path.split('.')[-1])
+        base_name = os.path.basename(file_path)
+        files_to_send.append(('file', (prefix + base_name, open(file_path, 'rb'), content_type, {'Expires': '0'})))
+    return files_to_send
+
+def uploadToIpfs(files):
+    multipart_form_data = prepareFormData(files)
     # sending post request and saving response as response object
     try:
         r = requests.post(url = _API_ENDPOINT, files = multipart_form_data, headers = _HEADERS)
@@ -123,27 +128,31 @@ def uploadFolderToIpfs():
     uri_list = getUriList(uri_list_file_path)
 
     os.chdir(_ASSET_FOLDER)
+    files_to_upload = []
     failed_file_names = []
     for file in os.listdir():
-        if file.endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.gif')):
-            file_name = file.split('.')[0]
-            file_path = _ASSET_FOLDER + '/' + file
+        if not file.endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.gif')):
+            continue
+        file_name = file.split('.')[0]
+        if isFileAlreadyUploaded(file_name, uri_list): continue
 
-            if isFileAlreadyUploaded(file_name, uri_list): continue
+        file_path = _ASSET_FOLDER + '/' + file
+        files_to_upload.append(file_path)
 
-            print('uploading file: ' + file_path)
-            ipfsUri = uploadToIpfs(file_path)
-            if (ipfsUri == None): 
-                print(f"FAILED UPLOAD of file {file_name}")
-                failed_file_names.append(file_name)
-                continue
+    print('uploading files: ' + str(files_to_upload))
+    ipfsUri = uploadToIpfs(files_to_upload)
+    if (ipfsUri == None): 
+        print(f"FAILED UPLOAD of file {file_name}")
+        failed_file_names.expend(files_to_upload)
 
-            uri_info = {
-                "name": file_name,
-                "uri": ipfsUri,
-                "onChain": False
-            }
-            uri_list = saveUploadInfo(uri_info, uri_list, uri_list_file_path)
+    for file in files_to_upload:
+        base_name = os.path.basename(file)
+        uri_info = {
+            "name": base_name,
+            "uri": ipfsUri + '/' + base_name,
+            "onChain": False
+        }
+        uri_list = saveUploadInfo(uri_info, uri_list, uri_list_file_path)
     
     print(f"Files that failed to upload: {failed_file_names}")
     if len(failed_file_names) == 0: print("All images were uploaded successfully")
